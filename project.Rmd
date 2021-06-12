@@ -1,0 +1,598 @@
+---
+title: "Project Time Series"
+author: "Carolin Drenda, Silje Anfindsen, Jonathan Stålberg"
+date: "3 5 2021"
+output: pdf_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+````{r}
+serie=ts(read.table("CO2IndUSA.dat"),start=1990,freq=12)
+plot(serie, type = "o")
+abline(v=1990:2020,col=4,lty=3)
+```
+
+# Identification
+
+## a)
+```{r}
+m=apply(matrix(serie,nr=12),2,mean)
+v=apply(matrix(serie,nr=12),2,var)
+plot(m,v,xlab="Mean",ylab="variance",main="serie")
+#abline(lm(v~m), col=2, lty=3,lwd=2)
+```
+
+
+```{r}
+boxplot(serie~floor(time(serie)))
+```
+
+
+
+
+
+```{r}
+monthplot(serie)
+```
+
+
+
+```{r}
+d12serie <- diff(serie, 12)
+
+```
+
+
+```{r}
+plot(d12serie, type = "o")
+abline(h=0)
+```
+
+```{r}
+d1d12serie <- diff(d12serie)
+
+```
+
+
+```{r}
+plot(d1d12serie, type = "o")
+abline(h=0)
+
+```
+
+```{r}
+var(serie)
+var(d12serie)
+var(d1d12serie)
+var(diff(d1d12serie)) # not needed
+```
+## b) 
+```{r}
+par(mfrow = c(1,2))
+acf(d1d12serie, ylim = c(-1,1), lag.max = 60, col = c(2,rep(1,11)), lwd = 2)
+pacf(d1d12serie, ylim = c(-1,1), lag.max = 60, col = c(rep(1,11),2), lwd = 2)
+
+```
+
+
+Seasonal: MA(1),(AR(3))
+Regular: ARMA(1,1), Ar(2), MA(1) (2,3)
+
+# Estimation
+
+
+## a)
+Model 1
+```{r}
+(mod=arima(d1d12serie, order=c(1,0,1),seasonal=list(order=c(0,0,1),period=12)))
+
+```
+mean non-sign
+
+```{r}
+# (mod1=arima(serie, order=c(1,1,1),seasonal=list(order=c(0,1,1),period=12)))
+# ar 1 not sign
+(mod1=arima(serie, order=c(0,1,1),seasonal=list(order=c(0,1,1),period=12)))
+
+```
+
+
+```{r}
+validation=function(model,dades){
+  s=frequency(get(model$series))
+  resid=model$residuals
+  par(mfrow=c(2,2),mar=c(3,3,3,3))
+  #Residuals plot
+  plot(resid,main="Residuals")
+  abline(h=0)
+  abline(h=c(-3*sd(resid),3*sd(resid)),lty=3,col=4)
+  #Square Root of absolute values of residuals (Homocedasticity)
+  scatter.smooth(sqrt(abs(resid)),main="Square Root of Absolute residuals",
+                 lpars=list(col=2))
+  
+  #Normal plot of residuals
+  qqnorm(resid)
+  qqline(resid,col=2,lwd=2)
+  
+  ##Histogram of residuals with normal curve
+  hist(resid,breaks=20,freq=FALSE)
+  curve(dnorm(x,mean=mean(resid),sd=sd(resid)),col=2,add=T)
+  
+  ## Individual Correlation Tests 
+  #ACF & PACF of residuals
+  par(mfrow=c(1,2))
+  acf(resid,ylim=c(-1,1),lag.max=60,col=c(2,rep(1,s-1)),lwd=1)
+  pacf(resid,ylim=c(-1,1),lag.max=60,col=c(rep(1,s-1),2),lwd=1)
+  par(mfrow=c(1,1))
+  
+  #ACF & PACF of square residuals 
+  par(mfrow=c(1,2))
+  acf(resid^2,ylim=c(-1,1),lag.max=60,col=c(2,rep(1,s-1)),lwd=1)
+  pacf(resid^2,ylim=c(-1,1),lag.max=60,col=c(rep(1,s-1),2),lwd=1)
+  par(mfrow=c(1,1))
+  
+  #Global Correlation Test
+  #Ljung-Box p-values
+  par(mar=c(2,2,1,1))
+  tsdiag(model,gof.lag=7*s)
+  cat("\n--------------------------------------------------------------------\n")
+  print(model)
+  
+  #Stationary and Invertible
+  cat("\nModul of AR Characteristic polynomial Roots: ", 
+      Mod(polyroot(c(1,-model$model$phi))),"\n")
+  cat("\nModul of MA Characteristic polynomial Roots: ",
+      Mod(polyroot(c(1,model$model$theta))),"\n")
+  
+  #Model expressed as an MA infinity (psi-weights)
+  psis=ARMAtoMA(ar=model$model$phi,ma=model$model$theta,lag.max=72)
+  names(psis)=paste("psi",1:72)
+  cat("\nPsi-weights (MA(inf))\n")
+  cat("\n--------------------\n")
+  print(psis[1:20])
+  
+  plot(psis,type="h",main="Pesos Psis - MA infinito")
+  
+  #Model expressed as an AR infinity (pi-weights)
+  pis=-ARMAtoMA(ar=-model$model$theta,ma=-model$model$phi,lag.max=72)
+  names(pis)=paste("pi",1:72)
+  cat("\nPi-weights (AR(inf))\n")
+  cat("\n--------------------\n")
+  print(pis[1:20])
+
+  plot(pis,type="h",main="Pesos Pis - AR infinito")
+  
+#   #Some Complementary Tests
+#   cat("\nNormality tests\n")
+#   cat("\n--------------------\n")  
+#   ##Shapiro-Wilks Normality test
+#   print(shapiro.test(resid(model)))
+# 
+#   suppressMessages(require(nortest,quietly=TRUE,warn.conflicts=FALSE))
+# ##Anderson-Darling test: Normality
+#   print(ad.test(resid(model)))
+#   
+#   suppressMessages(require(tseries,quietly=TRUE,warn.conflicts=FALSE))
+#   ##Jarque-Bera test: Normality
+#   print(jarque.bera.test(resid(model)))
+#   
+#   cat("\nHomoscedasticity Test\n")
+#   cat("\n--------------------\n")
+#   suppressMessages(require(lmtest,quietly=TRUE,warn.conflicts=FALSE))
+#   ##Breusch-Pagan test
+#   obs=get(model$series)
+#   print(bptest(resid(model)~I(obs-resid(model))))
+#   
+#   cat("\nIndependence Tests\n")
+#   cat("\n--------------------\n")
+#   
+#   ##Durbin-Watson test
+#   print(dwtest(resid(model)~I(1:length(resid(model)))))
+#   
+  ##Ljung-Box test
+  cat("\nLjung-Box test\n")
+  print(t(apply(matrix(c(1:4,(1:4)*s)),1,function(el) {
+    te=Box.test(resid(model),type="Ljung-Box",lag=el)
+    c(lag=(te$parameter),statistic=te$statistic[[1]],p.value=te$p.value)})))
+  
+  
+  #Sample ACF vs. Teoric ACF: similar?
+  par(mfrow=c(2,2),mar=c(3,3,3,3))
+  acf(dades, ylim=c(-1,1) ,lag.max=36,main="Sample ACF")
+  
+  plot(ARMAacf(model$model$phi,model$model$theta,lag.max=36),ylim=c(-1,1), 
+       type="h",xlab="Lag",  ylab="", main="ACF Teoric")
+  abline(h=0)
+  
+  #Sample PACF vs. Teoric PACF
+  pacf(dades, ylim=c(-1,1) ,lag.max=36,main="Sample PACF")
+  
+  plot(ARMAacf(model$model$phi,model$model$theta,lag.max=36, pacf=T),ylim=c(-1,1),
+       type="h", xlab="Lag", ylab="", main="PACF Teoric")
+  abline(h=0)
+  par(mfrow=c(1,1))
+}
+
+```
+
+```{r}
+validation(mod1, d1d12serie)
+```
+Ljung box is sign -> look for different model
+
+```{r}
+(mod2 = arima(d1d12serie, order=c(2,0,0),seasonal=list(order=c(0,0,1),period=12)))
+```
+intercept not
+```{r}
+#BEST MODEL:
+(mod3 = arima(serie, order=c(2,1,0),seasonal=list(order=c(0,1,1),period=12)))
+```
+# Validation
+
+## a,b,d)
+```{r}
+validation(mod3,d1d12serie)
+```
+
+# c)Stability
+```{r}
+ultim = c(2018,12)
+#pdq = c(2,1,0)
+#PDQ = c(0,1,1)
+serie1=window(serie)  
+serie2=window(serie,end=ultim)         
+```
+
+```{r}
+(mod31= arima(serie1, order=c(2,1,0),seasonal=list(order=c(0,1,1),period=12)))
+(mod32= arima(serie2, order=c(2,1,0),seasonal=list(order=c(0,1,1),period=12)))
+```
+Problem: shorter TS has lower aic
+
+
+# Prediction
+
+# a)
+```{r}
+pred=predict(mod32,n.ahead=12)
+pr<-ts(c(tail(serie2,1),pred$pred),start=ultim,freq=12)
+
+se<-ts(c(0,pred$se),start=ultim,freq=12)
+
+#Intervals
+tl<-ts(pr-1.96*se,start=ultim,freq=12)
+tu<-ts(pr+1.96*se,start=ultim,freq=12)
+pr<-ts(pr,start=ultim,freq=12)
+
+
+ts.plot(serie,tl,tu,pr,lty=c(1,2,2,1),col=c(1,4,4,2),xlim=ultim[1]+c(-3,+2),type="o",main="Model ARIMA(1,1,1)(0,1,1)12")
+abline(v=(ultim[1]-3):(ultim[1]+2),lty=3,col=4)
+```
+```{r}
+obs=window(serie,start=ultim)
+(mod.EQM1=sqrt(sum(((obs-pr)/obs)^2)/12))
+(mod.EAM1=sum(abs(obs-pr)/obs)/12)
+```
+```{r}
+pred <- predict(mod31,n.ahead=12)
+pr<-ts(c(tail(serie1,1),pred$pred),start=ultim + c(1,0),freq=12)
+se<-ts(c(0,pred$se),start=ultim + c(1,0),freq=12)
+
+#Intervals
+tl1<-ts(pr-1.96*se,start=ultim + c(1,0),freq=12)
+tu1<-ts(pr+1.96*se,start=ultim + c(1,0),freq=12)
+pr1<-ts(pr,start=ultim + c(1,0),freq=12)
+
+ts.plot(serie,tl1,tu1,pr1,lty=c(1,2,2,1),col=c(1,4,4,2),xlim=c(ultim[1]-2,ultim[1]+3),type="o",main="Model ARIMA(2,1,0)(0,1,1)12")
+abline(v=(ultim[1]-2):(ultim[1]+3),lty=3,col=4)
+previs1=window(cbind(tl1,pr1,tu1),start=ultim+c(1,0))
+```
+
+
+# Outlier treatment
+
+```{r}
+source("CalendarEffects.r")
+source("atipics2.r")
+```
+
+## a) Calendar effect:
+```{r}
+
+data=c(start(serie)[1],start(serie)[2], length(serie)) #starting year, month, series size
+(wTradDays=Wtrad(data)) #creates auxiliary variable for trading days configurations (5/2 the ideal proportion)
+```
+```{r}
+(wEast=Weaster(data))
+```
+```{r}
+(mod3EC=arima(serie,order=c(2,1,0),seasonal=list(order=c(1,1,0),period=12),xreg=data.frame(wTradDays,wEast)))
+```
+```{r}
+(mod3Ea=arima(serie,order=c(2,1,0),seasonal=list(order=c(1,1,0),period=12),xreg=data.frame(wEast)))
+```
+```{r}
+(mod3TD=arima(serie,order=c(2,1,0),seasonal=list(order=c(1,1,0),period=12),xreg=data.frame(wTradDays)))
+```
+Only use trading days not easter, because lowest aic and other parameters are not significant
+
+Calculate Trading day effect:
+```{r}
+EfecTD=coef(mod3TD)["wTradDays"]*wTradDays
+plot(EfecTD)
+```
+
+corrected series for trading day effect and compare with original serie:
+```{r}
+serieTD=serie-EfecTD
+plot(serie)
+lines(serieTD,col=2)
+```
+
+
+Transform into stationarity:
+```{r}
+d12serieTD <- diff(serieTD, 12)
+d1d12serieTD <- diff(d12serieTD)
+```
+
+Variance
+```{r}
+var(serieTD)
+var(d12serieTD)
+var(d1d12serieTD)
+var(diff(d1d12serieTD)) # not necessary
+```
+Same Transformation as before.
+
+
+```{r}
+par(mfrow=c(1,2), mar =c(1,2,4,1))
+acf(d1d12serieTD,ylim=c(-1,1),lag.max=72,col=c(2,rep(1,11)),lwd=2)
+pacf(d1d12serieTD,ylim=c(-1,1),lag.max=72,col=c(rep(1,11),2),lwd=2)
+```
+Modelidentification:
+seasonal: MA(1) (AR(3))
+Regular: MA(2), AR(2)
+
+
+Mdoel estimation
+```{r}
+#(modec <- arima(serie, order=c(0,1,1),seasonal=list(order=c(0,1,2),period=12), xreg=data.frame(wTradDays) ))
+# sma 2 not sign
+(modec <- arima(serie, order=c(0,1,1),seasonal=list(order=c(0,1,1),period=12), xreg=data.frame(wTradDays)))
+```
+```{r}
+# same parameters as before
+(modec2 <- arima(serie, order=c(2,1,0),seasonal=list(order=c(1,1,0),period=12), xreg=data.frame(wTradDays) ))
+```
+```{r}
+(modec3 <- arima(serie, order=c(2,1,0),seasonal=list(order=c(0,1,1),period=12), xreg=data.frame(wTradDays) ))
+```
+
+Prefer modec ARIMA(0,1,1)(0,1,1)_12 + wTradDays since aic is smaller,
+modec3 with ARIMA(2,1,0)(0,1,1)_12 + wTradDays also possible
+
+
+
+```{r}
+dades=d1d12serieTD
+model=modec
+validation(model,dades)
+```
+
+
+
+```{r}
+dades=d1d12serieTD
+model=modec3
+validation(model,dades)
+```
+
+Prefer modec3 (arima(2,1,0)(0,1,1)) because there are only 2 sign Ljung Box
+
+Maybe change model and use modec instead of modec3
+
+
+
+
+
+Effect of trading days:
+```{r}
+EfecTD=coef(modec)["wTradDays"]*wTradDays
+plot(EfecTD)
+```
+
+## b) Outlier
+(session 5:)
+```{r}
+
+# automatic detection of outliers
+mod.atip=outdetec(modec,dif=c(1,12),crit=2.8,LS=T)
+
+# estimated variance after outlier detection and treatment
+mod.atip$sigma2
+
+modec$sigma2
+
+```
+Variance after detection is smaller
+
+```{r}
+#Table with detected outliers, their types, magnitud, statistic values and chronology
+atipics=mod.atip$atip[order(mod.atip$atip[,1]),]
+
+meses=c("Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec")
+
+data.frame(atipics,Fecha=paste(meses[(atipics[,1]-1)%%12+1],start(serie)[1]+((atipics[,1]-1)%/%12)))
+```
+```{r}
+#additional column: percentage variation
+data.frame(atipics,Fecha=paste(meses[(atipics[,1]-1)%%12+1],start(serie)[1]+((atipics[,1]-1)%/%12)),perc.Obs=exp(atipics[,3])*100)
+```
+
+Linearize serie, (without outliers)
+```{r}
+serie.lin=lineal(serie,mod.atip$atip)
+#serieEC.lin=serie.lin-EfecTD
+```
+
+```{r}
+plot(serie.lin,col=2, ylim = c(100,160))
+lines(serie)
+```
+Plot of outlier profile
+```{r}
+plot(serie-serie.lin)
+```
+
+```{r}
+
+d12serie.lin=diff(serie.lin,12)
+d1d12serie.lin=diff(d12serie.lin)
+plot(d1d12serie,col=1,type="o")
+abline(v=1990:2020,lty=3,col=4)
+abline(h=0)
+```
+Identify model:
+
+```{r}
+par(mfrow=c(1,2))
+acf(d1d12serie.lin,ylim=c(-1,1),lag.max=72,col=c(2,rep(1,11)),lwd=2)
+pacf(d1d12serie.lin,ylim=c(-1,1),lag.max=72,col=c(rep(1,11),2),lwd=2)
+```
+Seasonal: MA(1) MA(2) (AR(3))
+Regular: AR(1), AR(2), MA(1)
+
+
+```{r}
+
+#(mod.lin2=arima(serie.lin,order=c(2,1,0),seasonal=list(order=c(0,1,2),period=12),xreg=data.frame(wTradDays)))
+#ma 2 not sign
+(mod.lin2=arima(serie.lin,order=c(0,1,1),seasonal=list(order=c(0,1,1),period=12),xreg=data.frame(wTradDays)))
+```
+Looks okay:
+
+```{r}
+dades=d1d12serie.lin
+model=mod.lin2
+validation(model,dades)
+```
+
+
+
+
+```{r}
+(mod.lin=arima(serie.lin,order=c(2,1,0),seasonal=list(order=c(3,1,0),period=12),xreg=data.frame(wTradDays)))
+dades=d1d12serie.lin
+model=mod.lin
+validation(model,dades)
+```
+This model does not look goof
+
+Stability
+```{r}
+ultim=c(2018,12)
+pdq=c(0,1,1)
+PDQ=c(0,1,1)
+
+serie1=window(serie.lin,end=ultim+c(1,0))
+serie2=window(serie.lin,end=ultim)
+
+wTradDays2=window(wTradDays,end=ultim)
+
+
+(mod=arima(serie1,order=pdq,seasonal=list(order=PDQ,period=12),xreg=data.frame(wTradDays)))
+(mod2=arima(serie2,order=pdq,seasonal=list(order=PDQ,period=12),xreg=data.frame(wTradDays2)))
+
+```
+model is stable
+
+
+## Forecast:
+
+
+Insample prediction: (not in assignment?)
+```{r}
+pred=predict(mod.lin2,n.ahead=12,newxreg=window(wTradDays,start=c(ultim[1]+1,1)))
+predic=pred$pr
+
+wLS=sum(mod.atip$atip[mod.atip$atip$type_detected=="LS" & mod.atip$atip$Obs<=length(serie)-12,3])
+pr<-ts(c(tail(serie2,1),predic)+wLS,start=ultim,freq=12)
+
+
+se<-ts(c(0,pred$se),start=ultim,freq=12)
+
+#Intervals
+tl<-ts(pr-1.96*se,start=ultim,freq=12)
+tu<-ts(pr+1.96*se,start=ultim,freq=12)
+pr<-ts(pr,start=ultim,freq=12)
+
+
+ts.plot(serie,tl,tu,pr,lty=c(1,2,2,1),col=c(1,4,4,2),xlim=ultim[1]+c(-3,2),type="o",main="Model ARIMA(2,1,0)(3,1,0)12+CE+Atip")
+abline(v=(ultim[1]-3):(ultim[1]+2),lty=3,col=4)
+
+
+```
+red obs in 2019 is weird, besides that: looks good, 
+
+```{r}
+obs=window(serie,start=ultim)
+(mod.EQM3=sqrt(sum(((obs-pr)/obs)^2)/12))
+
+(mod.EAM3=sum(abs(obs-pr)/obs)/12)
+```
+
+
+
+```{r}
+data3=c(ultim[1]+2, 1, 12)
+
+wTradDays3=Wtrad(data3)
+
+pred=predict(mod.lin2,n.ahead=12,newxreg=data.frame(wTradDays3)) ##wEast3))
+predic=pred$pr
+wLS=sum(mod.atip$atip[mod.atip$atip$type_detected=="LS",3])
+pr<-ts(c(serie[length(serie)],predic+wLS),start=ultim+c(1,0),freq=12)
+se<-ts(c(0,pred$se),start=ultim+c(1,0),freq=12)
+
+#Intervals
+tl3<-ts(pr-1.96*se,start=ultim+c(1,0),freq=12)
+tu3<-ts(pr+1.96*se,start=ultim+c(1,0),freq=12)
+pr3<-ts(pr,start=ultim+c(1,0),freq=12)
+
+ts.plot(serie,tl3,tu3,pr3,lty=c(1,2,2,1),col=c(1,4,4,2),xlim=ultim[1]+c(-2,3),type="o",main="Model ARIMA(0,1,1)(0,1,1)12+CE+Atip")
+abline(v=(ultim[1]-2):(ultim[1]+3),lty=3,col=4)
+previs3=window(cbind(tl3,pr3,tu3),start=ultim+c(1,0))
+```
+## Compare models
+
+
+```{r}
+par(mfrow = c(1,2))
+ts.plot(serie,previs1,lty=c(1,2,1,2),col=c(1,4,2,4),xlim=c(2018,2021),type="o",main="Model ARIMA(2,1,1)(0,1,1)12")
+abline(v=2016:2021,lty=3,col=4,ylim=c(15,280))
+ts.plot(serie,previs3,lty=c(1,2,1,2),col=c(1,4,2,4),xlim=c(2018,2021),type="o",main="Model ARIMA(3,1,0)(2,1,0)12+EC+Atip")
+abline(v=2016:2021,lty=3,col=4,ylim=c(15,280))
+```
+
+```{r}
+resul=data.frame(
+  par=c(length(coef(mod3)),length(coef(mod.lin2))+nrow(mod.atip$atip)),
+  
+  Sigma2Z=c(mod3$sigma2, mod.lin2$sigma2),
+  AIC=c(AIC(mod3), AIC(mod.lin2) + 2 * nrow(mod.atip$atip)),
+  BIC=c(BIC(mod3), BIC(mod.lin2) + log(length(serie)-13) * nrow(mod.atip$atip)),
+  RMSPE=c(mod.EQM1,mod.EQM3),
+  MAPE=c(mod.EAM1,mod.EAM3),
+  meanLength=c(sum(previs1[,3]-previs1[,1]),sum(previs3[,3]-previs3[,1]))/12)
+row.names(resul)=c("ARIMA(2,1,0)(0,1,1)12","ARIMA(0,1,1)(0,1,1)12+EC+IA+Atip")
+
+
+resul
+```
